@@ -1,20 +1,22 @@
-from tqdm import tqdm
 import argparse
 import numpy as np
 import pickle
+from multiprocessing import Process, Queue
 from sklearn.model_selection import train_test_split
+from progressbar import ProgressBar
+
 
 # 高速化のため
 import os
 os.environ["CHAINER_TYPE_CHECK"] = "0"
 
 import chainer
-from chainer import cuda, Variable, optimizers, serializers
 import chainer.functions as F
-import chainer.links as L
+from chainer import cuda, Variable, optimizers, serializers
 from neural_factorization_machines import NeuralFactorizationMachines
 
 OUTPUT_DIR = ""
+
 
 def load_dataset(filepath):
     with open(filepath, "rb") as f:
@@ -27,12 +29,11 @@ def save_model(model, suffix=""):
     serializers.save_hdf5("{}/my_model_{}.h5".format(OUTPUT_DIR, suffix), model)
 
 
-def one_epoch(model, optimizer, X, y, batch_size, feature_dim, xp, train=True):
+def make_minibatch(batch_queue, X, y, batch_size):
     x1 = []
     x2 = []
     t = []
-    sum_loss = 0
-    for i in tqdm(np.random.permutation(range(len(X)))):
+    for i in np.random.permutation(range(len(X))):
         feature = np.zeros(feature_dim, dtype=xp.float32)
         feature[X[i]] = 1
         x1.append(feature)
@@ -49,22 +50,58 @@ def one_epoch(model, optimizer, X, y, batch_size, feature_dim, xp, train=True):
             x2 = Variable(xp.array(x2, dtype=xp.int32))
             t = Variable(xp.array(t, dtype=xp.float32).reshape(len(t), 1))
 
-            predict = model(x1, x2)
-            loss = F.mean_squared_error(predict, t)
-
-            loss.backward()
-            optimizer.update(model, x1, x2)
-
-            sum_loss += float(loss.data) * batch_size
-
+            batch_queue.put((x1, x2, t))
             x1 = []
             x2 = []
             t = []
 
+    batch_queue.put((x1, x2, t))
+    batch_queue.put(None)
+
+
+def one_epoch(model, optimizer, X, y, batch_size, feature_dim, xp, train=True):
+    x1 = []
+    x2 = []
+    t = []
+    sum_loss = 0
+    workers = []
+    queue = Queue(maxsize=10)
+    X = np.random.permutation(X)
+    num_workers = 10
+
+    for i in range(num_workers):
+        tmp_X = X[i * (len(X) // num_workers):(i + 1) * (len(X) // num_workers)]
+        tmp_y = y[i * (len(y) // num_workers):(i + 1) * (len(y) // num_workers)]
+        worker = Process(target=make_minibatch, args=(queue, tmp_X, tmp_y, batch_size))
+        workers.append(worker)
+
+    for i in range(num_workers):
+        workers[i].start()
+
+    p = ProgressBar(max_value=(len(X) // num_workers) + 1)
+    i = 0
+    while(True):
+        data = queue.get()
+        if data is None:
+            end_worker_num += 1
+            if end_worker_num == num_workers:
+                break
+
+        x1, x2, t = data
+
+        predict = model(x1, x2)
+        loss = F.mean_squared_error(predict, t)
+        loss.backward()
+        optimizer.update(model, x1, x2)
+        sum_loss += float(loss.data) * batch_size
+        p.update(i + 1)
+        i += 1
+    p.finish()
+
     if train:
-        print("   train RMSE:{}".format(sum_loss))
+        print("   train RMSE:{}".format(sum_loss / len(X)))
     else:
-        print("   test RMSE:{}".format(sum_loss))
+        print("   test RMSE:{}".format(sum_loss / len(X)))
 
     return model
 
