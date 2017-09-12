@@ -21,11 +21,10 @@ class NeuralFactorizationMachines(chainer.Chain):
             w = chainer.initializers.HeNormal()
             self.linear_regression = L.Linear(None, 1, initialW=w)
             self.embed = L.EmbedID(feature_dim, factor_dim, ignore_label=0)
+            self.bn1 = L.BatchNormalization(factor_dim)
             self.fc1 = L.Linear(None, 128, initialW=w)
-            self.ln1 = L.LayerNormalization()
-            self.fc2 = L.Linear(128, 128, initialW=w)
-            self.ln2 = L.LayerNormalization()
-            self.fc3 = L.Linear(128, 1, initialW=w)
+            self.bn2 = L.BatchNormalization(128)
+            self.fc2 = L.Linear(128, 1, initialW=w)
 
     def __call__(self, x1, x2):
         # linear regression
@@ -39,10 +38,10 @@ class NeuralFactorizationMachines(chainer.Chain):
         sum_square = F.square(F.sum(factors, axis=1))
         square_sum = F.sum(F.square(factors), axis=1)
         second_order = 0.5 * (sum_square + square_sum)
+        second_order = F.dropout(self.bn1(second_order))
 
         # MLP
-        h1 = F.dropout(F.tanh(self.ln1(self.fc1(second_order))))
-        h2 = F.dropout(F.tanh(self.ln2(self.fc2(h1))))
-        y = self.fc3(h2) + reg
+        h = F.dropout(F.relu(self.bn2(self.fc1(second_order))))
+        y = self.fc2(h) + reg
 
         return y
