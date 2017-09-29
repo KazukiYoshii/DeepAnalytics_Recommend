@@ -9,7 +9,8 @@ import chainer.links as L
 
 class NeuralFactorizationMachines(chainer.Chain):
 
-    """Neural Factorization Machinesのオレオレchainer実装
+    """
+    Neural Factorization Machinesのオレオレchainer実装
     https://arxiv.org/abs/1708.05027
 
     実装力不足なので、入力が二又
@@ -26,7 +27,11 @@ class NeuralFactorizationMachines(chainer.Chain):
             self.bn2 = L.BatchNormalization(128)
             self.fc2 = L.Linear(128, 1, initialW=w)
 
-    def __call__(self, x1, x2):
+    def __call__(self, x1, x2, t):
+        y = self.predict(x1, x2)
+        return F.mean_squared_error(y, t)
+
+    def predict(self, x1, x2):
         # linear regression
         reg = self.linear_regression(x1)
 
